@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, DateTime
+from sqlalchemy import Boolean, String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -27,6 +27,9 @@ class Legislator(Base):
     url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     office_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Member status
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     cached_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
