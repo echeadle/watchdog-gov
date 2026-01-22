@@ -36,9 +36,9 @@
 - [x] Add campaign finance section with request button
 
 ## Search Enhancements
-- [ ] Implement server-side fuzzy matching
-- [ ] Add autocomplete suggestions endpoint
-- [ ] Integrate autocomplete into search form
+- [x] Implement server-side fuzzy matching
+- [x] Add autocomplete suggestions endpoint
+- [x] Integrate autocomplete into search form
 
 ## UI/UX Improvements
 - [ ] Apply blue/teal accent color scheme (modern civic tech style)

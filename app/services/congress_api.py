@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.models import Legislator, Bill, Vote, VotePosition
 from app.services.cache_config import CacheTTL, CachedResponse, is_cache_valid
+from app.services.fuzzy_search import fuzzy_search_legislators, fuzzy_search
 
 settings = get_settings()
 
@@ -25,10 +26,22 @@ class CongressAPIClient:
         return {"X-Api-Key": self.api_key}
 
     async def search_members(
-        self, db: AsyncSession, query: Optional[str] = None, state: Optional[str] = None
+        self, db: AsyncSession, query: Optional[str] = None, state: Optional[str] = None,
+        use_fuzzy: bool = True, limit: int = 20
     ) -> list[dict]:
-        """Search for members by name or state."""
-        params = {"format": "json", "limit": 50}
+        """Search for members by name or state with fuzzy matching.
+
+        Args:
+            db: Database session
+            query: Search query (name, partial name, or state)
+            state: Optional state filter (2-letter code)
+            use_fuzzy: Enable fuzzy matching for typo tolerance (default True)
+            limit: Maximum results to return
+
+        Returns:
+            List of matching members sorted by relevance
+        """
+        params = {"format": "json", "limit": 100}  # Fetch more for better fuzzy results
 
         if state:
             params["currentMember"] = "true"
@@ -45,22 +58,61 @@ class CongressAPIClient:
 
         members = data.get("members", [])
 
-        if query:
+        # Filter by state first if specified
+        if state:
+            state_upper = state.upper()
+            members = [m for m in members if m.get("state") == state_upper]
+
+        # Apply fuzzy matching if query provided
+        if query and use_fuzzy:
+            # Use fuzzy search for better matching
+            matched = fuzzy_search_legislators(query, members, threshold=0.3, limit=limit)
+            members = [m for m, score in matched]
+        elif query:
+            # Fall back to simple substring matching
             query_lower = query.lower()
             members = [
                 m for m in members
                 if query_lower in m.get("name", "").lower()
                 or query_lower in m.get("state", "").lower()
-            ]
+            ][:limit]
 
-        if state:
-            state_upper = state.upper()
-            members = [m for m in members if m.get("state") == state_upper]
-
+        # Cache all matched members
         for member in members:
             await self._cache_member(db, member)
 
         return members
+
+    async def search_cached_members(
+        self, db: AsyncSession, query: str, limit: int = 10
+    ) -> list[dict]:
+        """Search cached legislators in database with fuzzy matching.
+
+        This is faster than API search and works offline. Use for autocomplete.
+        """
+        # Get all cached legislators
+        result = await db.execute(
+            select(Legislator).where(Legislator.is_current == True).limit(500)
+        )
+        legislators = result.scalars().all()
+
+        if not legislators:
+            return []
+
+        # Convert to dicts for fuzzy search
+        leg_dicts = [self._member_to_dict(leg) for leg in legislators]
+
+        # Fuzzy search
+        matched = fuzzy_search(
+            query=query,
+            items=leg_dicts,
+            key_func=lambda m: m.get("directOrderName", ""),
+            state_func=lambda m: m.get("state", ""),
+            threshold=0.3,
+            limit=limit,
+        )
+
+        return [m for m, score in matched]
 
     async def get_member(
         self, db: AsyncSession, bioguide_id: str
