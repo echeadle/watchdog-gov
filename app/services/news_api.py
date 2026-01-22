@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import NewsArticle, Legislator
-from app.services.cache_config import CacheTTL, is_cache_valid
+from app.services.cache_config import CacheTTL, CachedResponse, is_cache_valid
 
 settings = get_settings()
 
@@ -26,48 +26,70 @@ class NewsAPIClient:
 
     async def get_legislator_news(
         self, db: AsyncSession, bioguide_id: str, limit: int = 10
-    ) -> list[dict]:
-        """Get news articles mentioning a legislator."""
+    ) -> CachedResponse[list[dict]]:
+        """Get news articles mentioning a legislator.
+
+        Returns:
+            CachedResponse containing news articles. Check is_stale flag
+            to determine if data may be outdated due to API failure.
+        """
+        # Check for fresh cached data first
         cached = await self._get_cached_news(db, bioguide_id)
         if cached:
-            return [self._article_to_dict(a) for a in cached[:limit]]
+            return CachedResponse.fresh([self._article_to_dict(a) for a in cached[:limit]])
 
         result = await db.execute(
             select(Legislator).where(Legislator.bioguide_id == bioguide_id)
         )
         legislator = result.scalar_one_or_none()
         if not legislator:
-            return []
+            return CachedResponse.fresh([])
 
         search_query = f'"{legislator.full_name}"'
 
         if not self.api_key:
-            return []
+            return CachedResponse.fresh([])
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/everything",
-                headers=self._get_headers(),
-                params={
-                    "q": search_query,
-                    "language": "en",
-                    "sortBy": "publishedAt",
-                    "pageSize": limit,
-                },
-                timeout=30.0,
-            )
-            if response.status_code == 401:
-                return []
-            response.raise_for_status()
-            data = response.json()
+        # Try to fetch fresh data from API
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/everything",
+                    headers=self._get_headers(),
+                    params={
+                        "q": search_query,
+                        "language": "en",
+                        "sortBy": "publishedAt",
+                        "pageSize": limit,
+                    },
+                    timeout=30.0,
+                )
+                if response.status_code == 401:
+                    # Auth error - try stale cache
+                    raise httpx.HTTPStatusError(
+                        "Unauthorized", request=response.request, response=response
+                    )
+                response.raise_for_status()
+                data = response.json()
 
-        articles = data.get("articles", [])
+            articles = data.get("articles", [])
 
-        await self._clear_old_cache(db, bioguide_id)
-        for article in articles:
-            await self._cache_article(db, bioguide_id, article)
+            await self._clear_old_cache(db, bioguide_id)
+            for article in articles:
+                await self._cache_article(db, bioguide_id, article)
 
-        return articles
+            return CachedResponse.fresh(articles)
+
+        except (httpx.HTTPError, httpx.TimeoutException):
+            # API failed - try to return stale cached data
+            stale_cached = await self._get_any_cached_news(db, bioguide_id)
+            if stale_cached:
+                return CachedResponse.stale(
+                    [self._article_to_dict(a) for a in stale_cached[:limit]],
+                    data_type="news articles"
+                )
+            # No cached data available
+            return CachedResponse.fresh([])
 
     async def _get_cached_news(
         self, db: AsyncSession, bioguide_id: str
@@ -84,6 +106,17 @@ class NewsAPIClient:
             return articles
 
         return []
+
+    async def _get_any_cached_news(
+        self, db: AsyncSession, bioguide_id: str
+    ) -> list[NewsArticle]:
+        """Get cached news regardless of TTL (for fallback on API failure)."""
+        result = await db.execute(
+            select(NewsArticle)
+            .where(NewsArticle.legislator_bioguide_id == bioguide_id)
+            .order_by(NewsArticle.published_at.desc())
+        )
+        return list(result.scalars().all())
 
     async def _clear_old_cache(self, db: AsyncSession, bioguide_id: str) -> None:
         """Clear old cached articles for a legislator."""

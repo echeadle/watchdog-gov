@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timedelta
 
-from app.services.cache_config import CacheTTL, get_ttl_timedelta, is_cache_valid
+from app.services.cache_config import CacheTTL, CachedResponse, get_ttl_timedelta, is_cache_valid
 
 
 class TestCacheTTLValues:
@@ -138,3 +138,63 @@ class TestTTLRelativeValues:
         """Members, bills, and votes should have the same TTL."""
         assert CacheTTL.MEMBERS.value == CacheTTL.BILLS.value
         assert CacheTTL.BILLS.value == CacheTTL.VOTES.value
+
+
+class TestCachedResponse:
+    """Test the CachedResponse wrapper class."""
+
+    def test_fresh_response_is_not_stale(self):
+        """Fresh response should have is_stale=False."""
+        response = CachedResponse.fresh({"key": "value"})
+        assert response.is_stale is False
+        assert response.warning is None
+        assert response.data == {"key": "value"}
+
+    def test_stale_response_is_marked_stale(self):
+        """Stale response should have is_stale=True."""
+        response = CachedResponse.stale({"key": "value"})
+        assert response.is_stale is True
+        assert response.warning is not None
+
+    def test_stale_response_has_warning_message(self):
+        """Stale response should include a warning message."""
+        response = CachedResponse.stale({"key": "value"}, data_type="test data")
+        assert "test data" in response.warning
+        assert "outdated" in response.warning.lower()
+
+    def test_fresh_with_none_data(self):
+        """Fresh response can contain None data."""
+        response = CachedResponse.fresh(None)
+        assert response.data is None
+        assert response.is_stale is False
+
+    def test_stale_with_list_data(self):
+        """Stale response can contain list data."""
+        data = [{"id": 1}, {"id": 2}]
+        response = CachedResponse.stale(data, data_type="items")
+        assert response.data == data
+        assert response.is_stale is True
+        assert "items" in response.warning
+
+    def test_cached_response_data_access(self):
+        """Data should be directly accessible from response."""
+        original_data = {"name": "John", "age": 30}
+        response = CachedResponse.fresh(original_data)
+        assert response.data["name"] == "John"
+        assert response.data["age"] == 30
+
+    def test_default_stale_warning_message(self):
+        """Default stale warning should mention 'data'."""
+        response = CachedResponse.stale({"key": "value"})
+        assert "data" in response.warning
+
+    def test_custom_data_type_in_warning(self):
+        """Custom data type should appear in warning message."""
+        response = CachedResponse.stale({}, data_type="legislator information")
+        assert "legislator information" in response.warning
+
+        response = CachedResponse.stale({}, data_type="campaign finance data")
+        assert "campaign finance data" in response.warning
+
+        response = CachedResponse.stale([], data_type="news articles")
+        assert "news articles" in response.warning

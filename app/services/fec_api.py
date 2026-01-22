@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import CampaignFinance, Expenditure, Legislator
-from app.services.cache_config import CacheTTL, is_cache_valid
+from app.services.cache_config import CacheTTL, CachedResponse, is_cache_valid
 
 settings = get_settings()
 
@@ -64,40 +64,59 @@ class FECAPIClient:
 
     async def get_candidate_finances(
         self, db: AsyncSession, bioguide_id: str
-    ) -> Optional[dict]:
-        """Get campaign finance summary for a legislator."""
+    ) -> CachedResponse[Optional[dict]]:
+        """Get campaign finance summary for a legislator.
+
+        Returns:
+            CachedResponse containing finance data. Check is_stale flag
+            to determine if data may be outdated due to API failure.
+        """
+        # Check for fresh cached data first
         cached = await self._get_cached_finance(db, bioguide_id)
         if cached:
-            return self._finance_to_dict(cached)
+            return CachedResponse.fresh(self._finance_to_dict(cached))
 
         result = await db.execute(
             select(Legislator).where(Legislator.bioguide_id == bioguide_id)
         )
         legislator = result.scalar_one_or_none()
         if not legislator:
-            return None
+            return CachedResponse.fresh(None)
 
-        candidate_id = await self.find_candidate_id(db, legislator)
-        if not candidate_id:
-            return None
+        # Try to fetch fresh data from API
+        try:
+            candidate_id = await self.find_candidate_id(db, legislator)
+            if not candidate_id:
+                return CachedResponse.fresh(None)
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/candidate/{candidate_id}/totals/",
-                params=self._get_params(per_page=1, sort="-cycle"),
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/candidate/{candidate_id}/totals/",
+                    params=self._get_params(per_page=1, sort="-cycle"),
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                data = response.json()
 
-        totals = data.get("results", [])
-        if not totals:
-            return None
+            totals = data.get("results", [])
+            if not totals:
+                return CachedResponse.fresh(None)
 
-        finance_data = totals[0]
-        await self._cache_finance(db, bioguide_id, candidate_id, finance_data)
+            finance_data = totals[0]
+            await self._cache_finance(db, bioguide_id, candidate_id, finance_data)
 
-        return finance_data
+            return CachedResponse.fresh(finance_data)
+
+        except (httpx.HTTPError, httpx.TimeoutException):
+            # API failed - try to return stale cached data
+            stale_cached = await self._get_any_cached_finance(db, bioguide_id)
+            if stale_cached:
+                return CachedResponse.stale(
+                    self._finance_to_dict(stale_cached),
+                    data_type="campaign finance data"
+                )
+            # No cached data available
+            return CachedResponse.fresh(None)
 
     async def get_expenditures(
         self, db: AsyncSession, bioguide_id: str, limit: int = 50
@@ -168,6 +187,17 @@ class FECAPIClient:
             return finance
 
         return None
+
+    async def _get_any_cached_finance(
+        self, db: AsyncSession, bioguide_id: str
+    ) -> Optional[CampaignFinance]:
+        """Get cached finance data regardless of TTL (for fallback on API failure)."""
+        result = await db.execute(
+            select(CampaignFinance).where(
+                CampaignFinance.legislator_bioguide_id == bioguide_id
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def _cache_finance(
         self,

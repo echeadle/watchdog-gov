@@ -8,8 +8,41 @@ TTL values are defined in hours for each data type:
 - Finance: 168 hours (1 week - FEC data updates infrequently)
 """
 
+from dataclasses import dataclass
 from enum import Enum
 from datetime import timedelta
+from typing import Generic, TypeVar, Optional
+
+T = TypeVar('T')
+
+
+@dataclass
+class CachedResponse(Generic[T]):
+    """Wrapper for API responses that may come from cache.
+
+    Attributes:
+        data: The actual response data
+        is_stale: True if data is from expired cache (served due to API failure)
+        warning: Human-readable warning message if data is stale
+    """
+
+    data: T
+    is_stale: bool = False
+    warning: Optional[str] = None
+
+    @classmethod
+    def fresh(cls, data: T) -> "CachedResponse[T]":
+        """Create a response with fresh data."""
+        return cls(data=data, is_stale=False, warning=None)
+
+    @classmethod
+    def stale(cls, data: T, data_type: str = "data") -> "CachedResponse[T]":
+        """Create a response with stale cached data."""
+        return cls(
+            data=data,
+            is_stale=True,
+            warning=f"This {data_type} may be outdated. Unable to fetch latest data from the source."
+        )
 
 
 class CacheTTL(Enum):

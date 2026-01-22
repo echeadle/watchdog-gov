@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import Legislator, Bill, Vote, VotePosition
-from app.services.cache_config import CacheTTL, is_cache_valid
+from app.services.cache_config import CacheTTL, CachedResponse, is_cache_valid
 
 settings = get_settings()
 
@@ -62,30 +62,51 @@ class CongressAPIClient:
 
         return members
 
-    async def get_member(self, db: AsyncSession, bioguide_id: str) -> Optional[dict]:
-        """Get detailed member information."""
+    async def get_member(
+        self, db: AsyncSession, bioguide_id: str
+    ) -> CachedResponse[Optional[dict]]:
+        """Get detailed member information.
+
+        Returns:
+            CachedResponse containing member data. Check is_stale flag
+            to determine if data may be outdated due to API failure.
+        """
+        # Check for fresh cached data first
         cached = await self._get_cached_member(db, bioguide_id)
         if cached:
-            return self._member_to_dict(cached)
+            return CachedResponse.fresh(self._member_to_dict(cached))
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/member/{bioguide_id}",
-                headers=self._get_headers(),
-                params={"format": "json"},
-                timeout=30.0,
-            )
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            data = response.json()
+        # Try to fetch fresh data from API
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/member/{bioguide_id}",
+                    headers=self._get_headers(),
+                    params={"format": "json"},
+                    timeout=30.0,
+                )
+                if response.status_code == 404:
+                    return CachedResponse.fresh(None)
+                response.raise_for_status()
+                data = response.json()
 
-        member = data.get("member")
-        if member:
-            await self._cache_member_detail(db, member)
-            return member
+            member = data.get("member")
+            if member:
+                await self._cache_member_detail(db, member)
+                return CachedResponse.fresh(member)
 
-        return None
+            return CachedResponse.fresh(None)
+
+        except (httpx.HTTPError, httpx.TimeoutException):
+            # API failed - try to return stale cached data
+            stale_cached = await self._get_any_cached_member(db, bioguide_id)
+            if stale_cached:
+                return CachedResponse.stale(
+                    self._member_to_dict(stale_cached),
+                    data_type="legislator information"
+                )
+            # No cached data available, return None
+            return CachedResponse.fresh(None)
 
     async def get_member_bills(
         self, db: AsyncSession, bioguide_id: str, limit: int = 20
@@ -160,6 +181,15 @@ class CongressAPIClient:
             return member
 
         return None
+
+    async def _get_any_cached_member(
+        self, db: AsyncSession, bioguide_id: str
+    ) -> Optional[Legislator]:
+        """Get cached member regardless of TTL (for fallback on API failure)."""
+        result = await db.execute(
+            select(Legislator).where(Legislator.bioguide_id == bioguide_id)
+        )
+        return result.scalar_one_or_none()
 
     async def _cache_member(self, db: AsyncSession, member_data: dict) -> None:
         """Cache member data from search results."""

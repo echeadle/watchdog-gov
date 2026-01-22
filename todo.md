@@ -21,7 +21,7 @@
 - [x] Implement NewsAPI client
 - [x] Implement caching service with TTL
 - [x] Update caching to variable TTLs (news: 1hr, votes: 24hr, finance: weekly)
-- [ ] Add "data may be outdated" warning when serving stale cache on API failure
+- [x] Add "data may be outdated" warning when serving stale cache on API failure
 - [ ] Implement request pooling for NewsAPI batch queries
 - [ ] Add per-section cache invalidation (refresh buttons)
 
