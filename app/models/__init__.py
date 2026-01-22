@@ -6,6 +6,7 @@ from app.models.vote import Vote, VotePosition
 from app.models.finance import CampaignFinance, Expenditure
 from app.models.news import NewsArticle
 from app.models.conversation import Conversation, Message
+from app.models.favorite import Favorite
 
 __all__ = [
     "Legislator",
@@ -17,4 +18,5 @@ __all__ = [
     "NewsArticle",
     "Conversation",
     "Message",
+    "Favorite",
 ]

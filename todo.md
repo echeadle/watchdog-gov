@@ -12,7 +12,7 @@
 - [x] Create Vote and VotePosition models
 - [x] Create CampaignFinance and Expenditure models
 - [x] Create Conversation and Message models for AI chat
-- [ ] Add Favorite model for user bookmarks (PWA offline support)
+- [x] Add Favorite model for user bookmarks (PWA offline support)
 - [x] Add former member flag/status to Legislator model
 
 ## API Services
@@ -84,7 +84,7 @@
 - [ ] Write unit tests for OpenFEC client
 - [ ] Write unit tests for NewsAPI client
 - [x] Write unit tests for caching service
-- [~] Write unit tests for database models (Legislator done)
+- [~] Write unit tests for database models (Legislator, Favorite done)
 - [ ] Write unit tests for AI agent tools
 - [ ] Write integration tests for main routes
 
