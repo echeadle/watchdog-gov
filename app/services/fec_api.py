@@ -1,6 +1,6 @@
 """OpenFEC API client for campaign finance data."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -9,10 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import CampaignFinance, Expenditure, Legislator
+from app.services.cache_config import CacheTTL, is_cache_valid
 
 settings = get_settings()
-
-CACHE_TTL_HOURS = 24
 
 
 class FECAPIClient:
@@ -157,7 +156,7 @@ class FECAPIClient:
     async def _get_cached_finance(
         self, db: AsyncSession, bioguide_id: str
     ) -> Optional[CampaignFinance]:
-        """Get cached finance data if not expired."""
+        """Get cached finance data if not expired (weekly TTL)."""
         result = await db.execute(
             select(CampaignFinance).where(
                 CampaignFinance.legislator_bioguide_id == bioguide_id
@@ -165,9 +164,8 @@ class FECAPIClient:
         )
         finance = result.scalar_one_or_none()
 
-        if finance:
-            if datetime.utcnow() - finance.cached_at < timedelta(hours=CACHE_TTL_HOURS):
-                return finance
+        if finance and is_cache_valid(finance.cached_at, CacheTTL.FINANCE):
+            return finance
 
         return None
 

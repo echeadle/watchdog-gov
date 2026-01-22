@@ -1,6 +1,6 @@
 """NewsAPI client for news articles about legislators."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -9,10 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import NewsArticle, Legislator
+from app.services.cache_config import CacheTTL, is_cache_valid
 
 settings = get_settings()
-
-CACHE_TTL_HOURS = 1
 
 
 class NewsAPIClient:
@@ -73,7 +72,7 @@ class NewsAPIClient:
     async def _get_cached_news(
         self, db: AsyncSession, bioguide_id: str
     ) -> list[NewsArticle]:
-        """Get cached news if not expired."""
+        """Get cached news if not expired (1 hour TTL)."""
         result = await db.execute(
             select(NewsArticle)
             .where(NewsArticle.legislator_bioguide_id == bioguide_id)
@@ -81,9 +80,8 @@ class NewsAPIClient:
         )
         articles = list(result.scalars().all())
 
-        if articles:
-            if datetime.utcnow() - articles[0].cached_at < timedelta(hours=CACHE_TTL_HOURS):
-                return articles
+        if articles and is_cache_valid(articles[0].cached_at, CacheTTL.NEWS):
+            return articles
 
         return []
 

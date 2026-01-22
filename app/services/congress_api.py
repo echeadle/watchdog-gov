@@ -1,6 +1,6 @@
 """Congress.gov API client for member, bill, and vote data."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -9,10 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import Legislator, Bill, Vote, VotePosition
+from app.services.cache_config import CacheTTL, is_cache_valid
 
 settings = get_settings()
-
-CACHE_TTL_HOURS = 24
 
 
 class CongressAPIClient:
@@ -157,9 +156,8 @@ class CongressAPIClient:
         )
         member = result.scalar_one_or_none()
 
-        if member:
-            if datetime.utcnow() - member.cached_at < timedelta(hours=CACHE_TTL_HOURS):
-                return member
+        if member and is_cache_valid(member.cached_at, CacheTTL.MEMBERS):
+            return member
 
         return None
 

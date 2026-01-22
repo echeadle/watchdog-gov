@@ -20,7 +20,7 @@
 - [x] Implement OpenFEC API client
 - [x] Implement NewsAPI client
 - [x] Implement caching service with TTL
-- [ ] Update caching to variable TTLs (news: 1hr, votes: 24hr, finance: weekly)
+- [x] Update caching to variable TTLs (news: 1hr, votes: 24hr, finance: weekly)
 - [ ] Add "data may be outdated" warning when serving stale cache on API failure
 - [ ] Implement request pooling for NewsAPI batch queries
 - [ ] Add per-section cache invalidation (refresh buttons)
@@ -83,7 +83,7 @@
 - [ ] Write unit tests for Congress.gov client
 - [ ] Write unit tests for OpenFEC client
 - [ ] Write unit tests for NewsAPI client
-- [ ] Write unit tests for caching service
+- [x] Write unit tests for caching service
 - [~] Write unit tests for database models (Legislator done)
 - [ ] Write unit tests for AI agent tools
 - [ ] Write integration tests for main routes
