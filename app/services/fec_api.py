@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -198,6 +198,35 @@ class FECAPIClient:
             )
         )
         return result.scalar_one_or_none()
+
+    async def invalidate_finance_cache(self, db: AsyncSession, bioguide_id: str) -> None:
+        """Invalidate cached finance data for a legislator.
+
+        Also clears associated expenditure records.
+        """
+        result = await db.execute(
+            select(CampaignFinance).where(
+                CampaignFinance.legislator_bioguide_id == bioguide_id
+            )
+        )
+        finance = result.scalar_one_or_none()
+        if finance:
+            # Delete expenditures first (foreign key constraint)
+            await db.execute(
+                delete(Expenditure).where(Expenditure.campaign_finance_id == finance.id)
+            )
+            # Delete finance record
+            await db.execute(
+                delete(CampaignFinance).where(CampaignFinance.id == finance.id)
+            )
+            await db.commit()
+
+    async def refresh_finances(
+        self, db: AsyncSession, bioguide_id: str
+    ) -> CachedResponse[Optional[dict]]:
+        """Force refresh finance data, bypassing cache."""
+        await self.invalidate_finance_cache(db, bioguide_id)
+        return await self.get_candidate_finances(db, bioguide_id)
 
     async def _cache_finance(
         self,

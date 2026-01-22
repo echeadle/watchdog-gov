@@ -1,5 +1,9 @@
-"""NewsAPI client for news articles about legislators."""
+"""NewsAPI client for news articles about legislators.
 
+Implements request pooling to minimize API calls given the 500 req/day limit.
+"""
+
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -12,6 +16,9 @@ from app.models import NewsArticle, Legislator
 from app.services.cache_config import CacheTTL, CachedResponse, is_cache_valid
 
 settings = get_settings()
+
+# Semaphore to limit concurrent NewsAPI requests (avoid rate limiting)
+_request_semaphore = asyncio.Semaphore(3)
 
 
 class NewsAPIClient:
@@ -50,27 +57,28 @@ class NewsAPIClient:
         if not self.api_key:
             return CachedResponse.fresh([])
 
-        # Try to fetch fresh data from API
+        # Try to fetch fresh data from API (with semaphore to limit concurrency)
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/everything",
-                    headers=self._get_headers(),
-                    params={
-                        "q": search_query,
-                        "language": "en",
-                        "sortBy": "publishedAt",
-                        "pageSize": limit,
-                    },
-                    timeout=30.0,
-                )
-                if response.status_code == 401:
-                    # Auth error - try stale cache
-                    raise httpx.HTTPStatusError(
-                        "Unauthorized", request=response.request, response=response
+            async with _request_semaphore:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{self.base_url}/everything",
+                        headers=self._get_headers(),
+                        params={
+                            "q": search_query,
+                            "language": "en",
+                            "sortBy": "publishedAt",
+                            "pageSize": limit,
+                        },
+                        timeout=30.0,
                     )
-                response.raise_for_status()
-                data = response.json()
+                    if response.status_code == 401:
+                        # Auth error - try stale cache
+                        raise httpx.HTTPStatusError(
+                            "Unauthorized", request=response.request, response=response
+                        )
+                    response.raise_for_status()
+                    data = response.json()
 
             articles = data.get("articles", [])
 
@@ -90,6 +98,67 @@ class NewsAPIClient:
                 )
             # No cached data available
             return CachedResponse.fresh([])
+
+    async def get_news_for_multiple_legislators(
+        self, db: AsyncSession, bioguide_ids: list[str], limit: int = 5
+    ) -> dict[str, CachedResponse[list[dict]]]:
+        """Fetch news for multiple legislators concurrently with request pooling.
+
+        This method efficiently batches requests using asyncio.gather and
+        deduplicates requests for the same legislator. Use this when loading
+        news for multiple legislators (e.g., search results, favorites list).
+
+        Args:
+            db: Database session
+            bioguide_ids: List of legislator bioguide IDs
+            limit: Max articles per legislator (default 5 for batch queries)
+
+        Returns:
+            Dict mapping bioguide_id to CachedResponse with news articles
+        """
+        # Deduplicate bioguide_ids
+        unique_ids = list(dict.fromkeys(bioguide_ids))
+
+        # Create tasks for all legislators
+        async def fetch_one(bioguide_id: str) -> tuple[str, CachedResponse[list[dict]]]:
+            result = await self.get_legislator_news(db, bioguide_id, limit=limit)
+            return (bioguide_id, result)
+
+        # Execute all requests concurrently (semaphore limits actual API calls)
+        tasks = [fetch_one(bid) for bid in unique_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Build result dict, handling any exceptions
+        output: dict[str, CachedResponse[list[dict]]] = {}
+        for result in results:
+            if isinstance(result, Exception):
+                # Skip failed requests - they'll return empty in individual calls
+                continue
+            bioguide_id, response = result
+            output[bioguide_id] = response
+
+        return output
+
+    async def invalidate_cache(self, db: AsyncSession, bioguide_id: str) -> None:
+        """Invalidate cached news for a legislator.
+
+        Call this when user explicitly requests a refresh. The next call to
+        get_legislator_news will fetch fresh data from the API.
+        """
+        await self._clear_old_cache(db, bioguide_id)
+
+    async def refresh_news(
+        self, db: AsyncSession, bioguide_id: str, limit: int = 10
+    ) -> CachedResponse[list[dict]]:
+        """Force refresh news for a legislator, bypassing cache.
+
+        Use this for explicit user-triggered refresh buttons.
+        """
+        # Clear existing cache first
+        await self._clear_old_cache(db, bioguide_id)
+
+        # Fetch fresh data (get_legislator_news will see no cache and fetch new)
+        return await self.get_legislator_news(db, bioguide_id, limit)
 
     async def _get_cached_news(
         self, db: AsyncSession, bioguide_id: str

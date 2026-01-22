@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -190,6 +190,40 @@ class CongressAPIClient:
             select(Legislator).where(Legislator.bioguide_id == bioguide_id)
         )
         return result.scalar_one_or_none()
+
+    async def invalidate_member_cache(self, db: AsyncSession, bioguide_id: str) -> None:
+        """Invalidate cached data for a member by resetting cached_at.
+
+        This forces the next request to fetch fresh data from the API.
+        """
+        result = await db.execute(
+            select(Legislator).where(Legislator.bioguide_id == bioguide_id)
+        )
+        member = result.scalar_one_or_none()
+        if member:
+            member.cached_at = None
+            await db.commit()
+
+    async def invalidate_bills_cache(self, db: AsyncSession, bioguide_id: str) -> None:
+        """Invalidate cached bills for a member."""
+        await db.execute(
+            delete(Bill).where(Bill.sponsor_bioguide_id == bioguide_id)
+        )
+        await db.commit()
+
+    async def refresh_member(
+        self, db: AsyncSession, bioguide_id: str
+    ) -> CachedResponse[Optional[dict]]:
+        """Force refresh member data, bypassing cache."""
+        await self.invalidate_member_cache(db, bioguide_id)
+        return await self.get_member(db, bioguide_id)
+
+    async def refresh_bills(
+        self, db: AsyncSession, bioguide_id: str, limit: int = 20
+    ) -> list[dict]:
+        """Force refresh bills for a member, bypassing cache."""
+        await self.invalidate_bills_cache(db, bioguide_id)
+        return await self.get_member_bills(db, bioguide_id, limit)
 
     async def _cache_member(self, db: AsyncSession, member_data: dict) -> None:
         """Cache member data from search results."""
