@@ -57,9 +57,9 @@
 - [ ] Update AI to hybrid mode (data-first, acknowledge general civic questions)
 
 ## Rate Limiting
-- [ ] Implement rate limiting middleware
-- [ ] Add rate limit headers to all responses
-- [ ] Configure limits per endpoint
+- [x] Implement rate limiting middleware
+- [x] Add rate limit headers to all responses
+- [x] Configure limits per endpoint
 
 ## PWA & Offline Support
 - [ ] Create service worker

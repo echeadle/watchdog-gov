@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.database import init_db
 from app.routers import chat, legislators
+from app.middleware import RateLimitMiddleware
 
 
 @asynccontextmanager
@@ -26,6 +27,9 @@ app = FastAPI(
 )
 
 templates = Jinja2Templates(directory="app/templates")
+
+# Add rate limiting middleware
+app.add_middleware(RateLimitMiddleware)
 
 app.include_router(legislators.router)
 app.include_router(chat.router)
